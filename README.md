@@ -1,6 +1,6 @@
 # 一键调色 · Lightroom Classic 插件
 
-版本 1.2.0 ｜ 适配 Lightroom Classic 12.4（SDK 12） ｜ 本项目由 DeepSeek 辅助生成
+版本 1.2.1 ｜ 适配 Lightroom Classic 12.4（SDK 12） ｜ 本项目由 DeepSeek 辅助生成
 
 选中一张或多张照片，一键完成：
 
