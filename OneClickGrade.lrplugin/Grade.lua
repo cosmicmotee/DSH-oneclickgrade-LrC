@@ -67,6 +67,7 @@ LrTasks.startAsyncTask(function()
 		local results = {}
 		local tBasic, tExport, tCurve = 0, 0, 0
 		local waitFailures, firstFailPhoto = 0, nil
+		local basicUnconfirmed = {}
 
 		-- Steps 1-2 run directly: in Lua 5.1 a coroutine may not yield across
 		-- pcall (a C call), and these steps wait on Lightroom's async APIs.
@@ -85,6 +86,7 @@ LrTasks.startAsyncTask(function()
 				if not confirmed then
 					waitFailures = waitFailures + 1
 					firstFailPhoto = firstFailPhoto or photo
+					basicUnconfirmed[photo] = true
 				end
 			end
 
@@ -113,6 +115,7 @@ LrTasks.startAsyncTask(function()
 					if not confirmed then
 						waitFailures = waitFailures + 1
 						firstFailPhoto = firstFailPhoto or item.photo
+						item.error = item.error or "曲线设置未生效"
 					end
 					item.curve = curve
 				else
@@ -131,15 +134,20 @@ LrTasks.startAsyncTask(function()
 		-- the p0.5/p99.5 probes are inputs to the endpoint maths, not results
 		-- the user needs to read.
 		local lines = {}
+		local failedLines = {}
 		local done, problems = 0, 0
 		for _, item in ipairs(results) do
 			local name = photoName(item.photo, item.path)
-			if item.curve then
+			local reason = item.error
+			if not reason and basicUnconfirmed[item.photo] then
+				reason = "基础设置未生效"
+			end
+			if item.curve and not reason then
 				done = done + 1
 				lines[#lines + 1] = "✔ " .. name
 			else
 				problems = problems + 1
-				lines[#lines + 1] = "✘ " .. name .. "：" .. tostring(item.error or "未知错误")
+				failedLines[#failedLines + 1] = "✘ " .. name .. "：" .. tostring(reason or "未知错误")
 			end
 		end
 
@@ -155,7 +163,15 @@ LrTasks.startAsyncTask(function()
 		if problems > 0 then
 			summary = summary .. string.format("\n%d 张需要注意：", problems)
 		end
-		local message = summary .. "\n\n" .. table.concat(lines, "\n")
+		local detail
+		if problems > 0 then
+			detail = table.concat(failedLines, "\n")
+		elseif done > 0 and #photos <= 30 then
+			detail = table.concat(lines, "\n")
+		else
+			detail = "全部成功。"
+		end
+		local message = summary .. "\n\n" .. detail
 		if progress:isCanceled() then
 			message = "操作已取消，已处理的步骤会保留在历史记录中。\n\n" .. message
 		end

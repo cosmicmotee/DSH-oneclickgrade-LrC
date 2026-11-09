@@ -104,8 +104,13 @@ function Core.applyBasic(photo, historyName)
 		photo:applyDevelopSettings(settings, historyName .. "·基础")
 	end)
 	-- applyDevelopSettings commits with the write block; the poll is only a
-	-- safety net, so keep its budget short instead of stalling the batch.
-	return waitForSettings(photo, settings, 0.5)
+	-- safety net. A slow disk can swallow the first write, so retry once
+	-- before reporting the photo as unconfirmed.
+	if waitForSettings(photo, settings, 1.0) then return true end
+	withWrite(catalog, historyName .. "·基础（重试）", function()
+		photo:applyDevelopSettings(settings, historyName .. "·基础（重试）")
+	end)
+	return waitForSettings(photo, settings, 1.5)
 end
 
 function Core.applyCurve(photo, curve, historyName)
@@ -120,7 +125,11 @@ function Core.applyCurve(photo, curve, historyName)
 	withWrite(catalog, historyName .. "·曲线", function()
 		photo:applyDevelopSettings(settings, historyName .. "·曲线")
 	end)
-	return waitForSettings(photo, { ToneCurvePV2012 = curve.flat }, 0.5)
+	if waitForSettings(photo, { ToneCurvePV2012 = curve.flat }, 1.0) then return true end
+	withWrite(catalog, historyName .. "·曲线（重试）", function()
+		photo:applyDevelopSettings(settings, historyName .. "·曲线（重试）")
+	end)
+	return waitForSettings(photo, { ToneCurvePV2012 = curve.flat }, 1.5)
 end
 
 -- Build the export settings used for the analysis TIFF.
