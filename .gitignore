@@ -1,0 +1,8 @@
+node_modules/
+.npm-cache/
+test-photos/
+*.zip
+__pycache__/
+*.tif
+*.pyc
+.DS_Store
