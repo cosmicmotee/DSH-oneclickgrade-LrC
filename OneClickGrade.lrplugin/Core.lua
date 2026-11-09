@@ -41,6 +41,27 @@ function Core.selectedPhotos()
 	return catalog:getTargetPhotos()
 end
 
+-- Lightroom cannot write develop settings to videos, so detect them up front
+-- instead of letting a mixed selection report them as failures. fileFormat is
+-- "VIDEO" for videos in the catalog; the extension check is a safety net for
+-- formats where that metadata is unavailable.
+function Core.isVideo(photo)
+	local fmt = photo:getRawMetadata("fileFormat")
+	if fmt == "VIDEO" or fmt == "Video" then return true end
+	local path = photo:getRawMetadata("path")
+	if type(path) == "string" then
+		local ext = path:match("%.([%a%d]+)$")
+		if ext then
+			ext = ext:lower()
+			if ext == "mov" or ext == "mp4" or ext == "avi" or ext == "mts"
+				or ext == "m2ts" or ext == "m4v" or ext == "3gp" or ext == "wmv" or ext == "mkv" then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 -- getDevelopSettings may yield internally, and in Lua 5.1 a yield cannot cross
 -- a pcall boundary, so it is called directly instead of being wrapped.
 local function settingsApplied(photo, expected)

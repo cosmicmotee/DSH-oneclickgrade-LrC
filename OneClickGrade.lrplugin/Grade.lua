@@ -50,9 +50,24 @@ end
 LrTasks.startAsyncTask(function()
 	local startedAt = LrDate.currentTime()
 	LrFunctionContext.callWithContext("OneClickGrade", function(context)
-		local photos = Core.selectedPhotos()
-		if not photos or #photos == 0 then
+		local selected = Core.selectedPhotos()
+		if not selected or #selected == 0 then
 			LrDialogs.message("一键调色", "请先在 Lightroom 中选中至少一张照片。", "info")
+			return
+		end
+
+		-- Videos have no develop settings; drop them before the batch starts.
+		local photos, skippedVideos = {}, 0
+		for _, photo in ipairs(selected) do
+			if Core.isVideo(photo) then
+				skippedVideos = skippedVideos + 1
+			else
+				photos[#photos + 1] = photo
+			end
+		end
+		if #photos == 0 then
+			LrDialogs.message("一键调色",
+				string.format("选中的 %d 个文件都是视频，已跳过。", skippedVideos), "info")
 			return
 		end
 
@@ -157,6 +172,9 @@ LrTasks.startAsyncTask(function()
 			#photos, done, elapsed, perPhoto)
 		summary = summary .. string.format("\n耗时明细：基础 %.1f 秒，分析导出 %.1f 秒，曲线 %.1f 秒。",
 			tBasic, tExport, tCurve)
+		if skippedVideos > 0 then
+			summary = summary .. string.format("\n已跳过 %d 个视频（视频不支持调色）。", skippedVideos)
+		end
 		if waitFailures > 0 and firstFailPhoto then
 			summary = summary .. "\n⚠ 设置确认超时 " .. waitFailures .. " 次；示例：" .. Core.readBack(firstFailPhoto)
 		end
