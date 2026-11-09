@@ -30,8 +30,6 @@ local Settings = loadModule("Settings")
 local function photoName(photo, pathFallback)
 	local name = photo:getFormattedMetadata("fileName")
 	if name and name ~= "" then return name end
-	name = photo:getRawMetadata("fileName")
-	if name and name ~= "" then return name end
 	name = photo:getRawMetadata("path")
 	if name and name ~= "" then
 		local leaf = LrPathUtils.leafName(name)
@@ -84,57 +82,74 @@ LrTasks.startAsyncTask(function()
 		local waitFailures, firstFailPhoto = 0, nil
 		local basicUnconfirmed = {}
 
-		-- Steps 1-2 run directly: in Lua 5.1 a coroutine may not yield across
+		-- Steps run directly: in Lua 5.1 a coroutine may not yield across a
 		-- pcall (a C call), and these steps wait on Lightroom's async APIs.
 		do
-			-- Step 1: basic tone ----------------------------------------------
-			-- The photo stays in colour. "Black & white" here is an analysis
-			-- model (luma), not a treatment: the tone range used for the curve
-			-- is measured from the luminance of this colour+basic image.
+			-- Step 1: basic tone, one write-access block per batch.
 			progress:setCaption("步骤 1/2：调整基础影调")
-			for i, photo in ipairs(photos) do
-				if progress:isCanceled() then return end
-				progress:setPortionComplete((i - 1) / #photos)
-				local t0 = LrDate.currentTime()
-				local confirmed = Core.applyBasic(photo, settings.historyName)
-				tBasic = tBasic + (LrDate.currentTime() - t0)
-				if not confirmed then
-					waitFailures = waitFailures + 1
-					firstFailPhoto = firstFailPhoto or photo
-					basicUnconfirmed[photo] = true
-				end
+			local t0 = LrDate.currentTime()
+			local unconfirmed = Core.applyBasicMany(photos, settings.historyName,
+				function(frac)
+					progress:setPortionComplete(frac * 0.4)
+					return not progress:isCanceled()
+				end)
+			tBasic = LrDate.currentTime() - t0
+			for _, photo in ipairs(unconfirmed) do
+				basicUnconfirmed[photo] = true
+				waitFailures = waitFailures + 1
+				firstFailPhoto = firstFailPhoto or photo
 			end
 
-			-- Step 2: measure the tone range and write the point curve ----------
+			-- Step 2: measure the tone range and write the point curve.
 			if settings.mode == "auto" then
 				progress:setCaption("步骤 2/2：分析高光 / 阴影并设置曲线")
 				tempDir = Core.makeTempDir(settings)
-				local t0 = LrDate.currentTime()
+				local t1 = LrDate.currentTime()
 				results = Core.exportAndAnalyze(photos, tempDir, settings.longEdge)
-				tExport = LrDate.currentTime() - t0
+				tExport = LrDate.currentTime() - t1
+
+				local curveItems = {}
+				for _, item in ipairs(results) do
+					local curve, curveError = Core.buildCurve(item.photo, item.stats, settings)
+					if curve then
+						item.curve = curve
+						curveItems[#curveItems + 1] = item
+					else
+						item.error = curveError
+					end
+				end
+
+				local t2 = LrDate.currentTime()
+				local unconfirmedCurve = Core.applyCurveMany(curveItems, settings.historyName,
+					function(frac)
+						progress:setPortionComplete(0.4 + frac * 0.6)
+						return not progress:isCanceled()
+					end)
+				tCurve = LrDate.currentTime() - t2
+				for _, item in ipairs(unconfirmedCurve) do
+					waitFailures = waitFailures + 1
+					firstFailPhoto = firstFailPhoto or item.photo
+					item.error = item.error or "曲线设置未生效"
+				end
 			else
 				progress:setCaption("步骤 2/2：使用固定端点设置曲线")
+				local curveItems = {}
 				for _, photo in ipairs(photos) do
-					results[#results + 1] = { photo = photo }
-				end
-			end
-
-			for i, item in ipairs(results) do
-				if progress:isCanceled() then return end
-				progress:setPortionComplete((i - 1) / math.max(1, #results))
-				local curve, curveError = Core.buildCurve(item.photo, item.stats, settings)
-				if curve then
-					local t0 = LrDate.currentTime()
-					local confirmed = Core.applyCurve(item.photo, curve, settings.historyName)
-					tCurve = tCurve + (LrDate.currentTime() - t0)
-					if not confirmed then
-						waitFailures = waitFailures + 1
-						firstFailPhoto = firstFailPhoto or item.photo
-						item.error = item.error or "曲线设置未生效"
+					local item = { photo = photo }
+					local curve, curveError = Core.buildCurve(photo, nil, settings)
+					if curve then
+						item.curve = curve
+						curveItems[#curveItems + 1] = item
+					else
+						item.error = curveError
 					end
-					item.curve = curve
-				else
-					item.error = curveError
+					results[#results + 1] = item
+				end
+				local unconfirmedCurve = Core.applyCurveMany(curveItems, settings.historyName)
+				for _, item in ipairs(unconfirmedCurve) do
+					waitFailures = waitFailures + 1
+					firstFailPhoto = firstFailPhoto or item.photo
+					item.error = item.error or "曲线设置未生效"
 				end
 			end
 		end
@@ -150,7 +165,7 @@ LrTasks.startAsyncTask(function()
 		-- the user needs to read.
 		local lines = {}
 		local failedLines = {}
-		local done, problems = 0, 0
+		local doneCount, problems = 0, 0
 		for _, item in ipairs(results) do
 			local name = photoName(item.photo, item.path)
 			local reason = item.error
@@ -158,7 +173,7 @@ LrTasks.startAsyncTask(function()
 				reason = "基础设置未生效"
 			end
 			if item.curve and not reason then
-				done = done + 1
+				doneCount = doneCount + 1
 				lines[#lines + 1] = "✔ " .. name
 			else
 				problems = problems + 1
@@ -169,7 +184,7 @@ LrTasks.startAsyncTask(function()
 		local elapsed = LrDate.currentTime() - startedAt
 		local perPhoto = elapsed / math.max(1, #photos)
 		local summary = string.format("已处理 %d 张照片，成功 %d 张，总耗时 %.1f 秒（平均 %.1f 秒/张）。",
-			#photos, done, elapsed, perPhoto)
+			#photos, doneCount, elapsed, perPhoto)
 		summary = summary .. string.format("\n耗时明细：基础 %.1f 秒，分析导出 %.1f 秒，曲线 %.1f 秒。",
 			tBasic, tExport, tCurve)
 		if skippedVideos > 0 then
@@ -184,7 +199,7 @@ LrTasks.startAsyncTask(function()
 		local detail
 		if problems > 0 then
 			detail = table.concat(failedLines, "\n")
-		elseif done > 0 and #photos <= 30 then
+		elseif doneCount > 0 and #photos <= 30 then
 			detail = table.concat(lines, "\n")
 		else
 			detail = "全部成功。"

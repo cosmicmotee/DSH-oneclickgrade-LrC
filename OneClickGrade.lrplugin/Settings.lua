@@ -18,8 +18,8 @@ local DEFAULTS = {
 	highlightPoint = 240,
 	shadowPoint = 15,
 	-- Long edge of the temporary TIFF used for analysis (pixels).
-	-- 800 is plenty for a histogram and renders much faster than 1600.
-	longEdge = 800,
+	-- 512 is plenty for a histogram and renders much faster than 1600.
+	longEdge = 512,
 	-- Scratch folder. Files are deleted after each run.
 	tempDir = "D:\\cache\\LrC",
 	deleteTemp = true,

@@ -19,6 +19,7 @@ local LrTasks = import 'LrTasks'
 local LrFunctionContext = import 'LrFunctionContext'
 local LrDialogs = import 'LrDialogs'
 local LrPathUtils = import 'LrPathUtils'
+local LrDate = import 'LrDate'
 
 local Core = loadModule("Core")
 local Settings = loadModule("Settings")
@@ -29,8 +30,6 @@ local TiffReader = loadModule("TiffReader")
 -- pcall (Lua 5.1 cannot yield across a C call).
 local function photoName(photo)
 	local name = photo:getFormattedMetadata("fileName")
-	if name and name ~= "" then return name end
-	name = photo:getRawMetadata("fileName")
 	if name and name ~= "" then return name end
 	name = photo:getRawMetadata("path")
 	if name and name ~= "" then
@@ -72,7 +71,6 @@ LrTasks.startAsyncTask(function()
 		do
 			lines[#lines + 1] = "照片：" .. photoName(photo)
 			lines[#lines + 1] = "  formatted.fileName = " .. tostring(photo:getFormattedMetadata("fileName"))
-			lines[#lines + 1] = "  raw.fileName = " .. tostring(photo:getRawMetadata("fileName"))
 			lines[#lines + 1] = "  raw.path = " .. tostring(photo:getRawMetadata("path"))
 
 			local ds = photo:getDevelopSettings() or {}
@@ -119,6 +117,7 @@ LrTasks.startAsyncTask(function()
 
 			report("sRGB 8bit", Core.makeTempDir(settings), {})
 			report("ProPhoto 16bit", Core.makeTempDir(settings), { colorSpace = "ProPhotoRGB", bitDepth = 16 })
+
 		end
 
 		LrDialogs.message("一键调色 · 诊断", table.concat(lines, "\n"), "info")

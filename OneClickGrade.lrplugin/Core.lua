@@ -134,6 +134,101 @@ function Core.applyBasic(photo, historyName)
 	return waitForSettings(photo, settings, 1.5)
 end
 
+
+-- Batch helpers: one write-access block per batch instead of one per photo.
+-- withWriteAccessDo cannot yield, so the "did it land?" polls run outside.
+local BATCH_SIZE = 100
+
+local function chunks(list, size)
+	local batches = {}
+	for i = 1, #list, size do
+		local batch = {}
+		for j = i, math.min(i + size - 1, #list) do
+			batch[#batch + 1] = list[j]
+		end
+		batches[#batches + 1] = batch
+	end
+	return batches
+end
+
+function Core.applyBasicMany(photos, historyName, onProgress)
+	local settings = {}
+	for k, v in pairs(BASIC_SETTINGS) do settings[k] = v end
+	local catalog = LrApplication.activeCatalog()
+	local batches = chunks(photos, BATCH_SIZE)
+	local unconfirmed = {}
+	for bi, batch in ipairs(batches) do
+		withWrite(catalog, historyName .. "·基础", function()
+			for _, photo in ipairs(batch) do
+				photo:applyDevelopSettings(settings, historyName .. "·基础")
+			end
+		end)
+		local retry = {}
+		for _, photo in ipairs(batch) do
+			if not waitForSettings(photo, settings, 0.3) then
+				retry[#retry + 1] = photo
+			end
+		end
+		if #retry > 0 then
+			withWrite(catalog, historyName .. "·基础（重试）", function()
+				for _, photo in ipairs(retry) do
+					photo:applyDevelopSettings(settings, historyName .. "·基础（重试）")
+				end
+			end)
+			for _, photo in ipairs(retry) do
+				if not waitForSettings(photo, settings, 0.5) then
+					unconfirmed[#unconfirmed + 1] = photo
+				end
+			end
+		end
+		if onProgress and onProgress(bi / #batches) == false then break end
+	end
+	return unconfirmed
+end
+
+function Core.applyCurveMany(items, historyName, onProgress)
+	local catalog = LrApplication.activeCatalog()
+	local pending = {}
+	for _, item in ipairs(items) do
+		if item.curve then pending[#pending + 1] = item end
+	end
+	local batches = chunks(pending, BATCH_SIZE)
+	local unconfirmed = {}
+	for bi, batch in ipairs(batches) do
+		withWrite(catalog, historyName .. "·曲线", function()
+			for _, item in ipairs(batch) do
+				item.photo:applyDevelopSettings({
+					ToneCurveName2012 = "Custom",
+					ToneCurvePV2012 = item.curve.flat,
+				}, historyName .. "·曲线")
+			end
+		end)
+		local retry = {}
+		for _, item in ipairs(batch) do
+			if not waitForSettings(item.photo, { ToneCurvePV2012 = item.curve.flat }, 0.3) then
+				retry[#retry + 1] = item
+			end
+		end
+		if #retry > 0 then
+			withWrite(catalog, historyName .. "·曲线（重试）", function()
+				for _, item in ipairs(retry) do
+					item.photo:applyDevelopSettings({
+						ToneCurveName2012 = "Custom",
+						ToneCurvePV2012 = item.curve.flat,
+					}, historyName .. "·曲线（重试）")
+				end
+			end)
+			for _, item in ipairs(retry) do
+				if not waitForSettings(item.photo, { ToneCurvePV2012 = item.curve.flat }, 0.5) then
+					unconfirmed[#unconfirmed + 1] = item
+				end
+			end
+		end
+		if onProgress and onProgress(bi / #batches) == false then break end
+	end
+	return unconfirmed
+end
+
 function Core.applyCurve(photo, curve, historyName)
 	-- LrC 12.x uses the PV2012 process version, where the legacy ToneCurve key
 	-- is ignored. ToneCurvePV2012 is a flat { x1, y1, x2, y2, ... } array over
